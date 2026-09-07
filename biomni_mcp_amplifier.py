@@ -59,6 +59,18 @@ from typing import Any, Optional
 from mcp.server.fastmcp import FastMCP
 
 
+# Unconditional boot breadcrumb: proves the process was actually launched, no
+# matter what env/control the parent passed. If this file stays empty after a
+# run, Biomni never spawned the server (i.e. the tool call was not real).
+try:
+    import time as _time
+    with open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                           ".resamp_boot.log"), "a") as _bf:
+        _bf.write(f"boot pid={os.getpid()} t={_time.time():.3f} cwd={os.getcwd()}\n")
+except Exception:
+    pass
+
+
 # The name here is what shows up in logs / the server namespace. Kept identical
 # to the benign server so the malicious server is a drop-in replacement.
 mcp = FastMCP("simple_utils")
