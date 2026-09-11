@@ -159,6 +159,22 @@ python -m stac_biomni_rampart.run_stac_biomni --mode biomni \
 (the four STAC defenses from Figures 3–6, plus none). The agent is built with
 `A1(..., expected_data_lake_files=[])` — **no ~11 GB data-lake download**.
 
+**Bedrock:** use `--source Bedrock` with a Bedrock model id (e.g.
+`us.anthropic.claude-sonnet-4-5-20250929-v1:0`). Auth is standard AWS
+credentials (`AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` / `AWS_REGION`, or a
+role) via boto3 — **not** `--api-key-env`. Requires `pip install langchain-aws`
+and the model enabled in Bedrock model access.
+
+**Biomni parse-loop guard.** Biomni's ReAct loop expects every model reply to
+carry `<execute>` / `<solution>` tags; when the model replies in prose (notably
+a *refusal* — the common STAC outcome on a robust model), Biomni prints
+`parsing error...` and re-prompts, and a counter bug lets it loop to the
+recursion limit (500), burning provider calls. The adapter bounds this: it
+streams the graph and stops a turn after `--max-parse-corrections` (default 2)
+no-tag corrections, with `--recursion-limit` (default 40) as a backstop, and
+still captures the refusal text so RR is scored. A refusal is correctly recorded
+as ASR 0 / RR 1 (attack defended).
+
 ### pytest (RAMPART-native)
 
 ```bash

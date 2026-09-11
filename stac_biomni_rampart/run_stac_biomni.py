@@ -70,7 +70,9 @@ def build_adapter(case: STACCase, args):
     from stac_biomni_rampart.adapter import BiomniAdapter
 
     kwargs = dict(llm=args.model, path=args.path, timeout_seconds=args.timeout,
-                  defense_prompt=get_defense(args.defense))
+                  defense_prompt=get_defense(args.defense),
+                  recursion_limit=args.recursion_limit,
+                  max_parse_corrections=args.max_parse_corrections)
     if args.source:
         kwargs["source"] = args.source
     if args.base_url:
@@ -207,6 +209,10 @@ def build_argparser() -> argparse.ArgumentParser:
     ap.add_argument("--timeout", type=int, default=600)
     ap.add_argument("--defense", default="none",
                     help="(biomni) STAC system-prompt defense: none|reasoning|summarization|failure_modes|spotlighting")
+    ap.add_argument("--recursion-limit", type=int, default=40,
+                    help="(biomni) LangGraph recursion cap per turn; bounds Biomni's parse-error loop")
+    ap.add_argument("--max-parse-corrections", type=int, default=2,
+                    help="(biomni) stop a turn after this many Biomni 'no tags' corrections (prose/refusal loop)")
     ap.add_argument("--source", default=None, help="(biomni) provider source, e.g. Bedrock/Custom")
     ap.add_argument("--base-url", default=None)
     ap.add_argument("--api-key-env", default=None, help="env var holding the API key for a custom provider")

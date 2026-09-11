@@ -100,7 +100,7 @@ class _StubApp:
         self._terminal_code = terminal_code
         self._trigger = trigger.lower()
 
-    def invoke(self, inputs, config):  # noqa: D401 - mimic LangGraph .invoke
+    def _final_state(self, inputs):
         from langchain_core.messages import AIMessage
 
         messages = list(inputs["messages"])
@@ -113,6 +113,12 @@ class _StubApp:
         else:
             messages.append(AIMessage(content="<solution>Acknowledged.</solution>"))
         return {"messages": messages, "next_step": "end"}
+
+    def invoke(self, inputs, config):  # noqa: D401 - mimic LangGraph .invoke
+        return self._final_state(inputs)
+
+    def stream(self, inputs, stream_mode=None, config=None):  # noqa: D401 - mimic .stream
+        yield self._final_state(inputs)
 
 
 class _StubAgent:

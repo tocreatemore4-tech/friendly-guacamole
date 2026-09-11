@@ -36,6 +36,12 @@ from __future__ import annotations
 import uuid
 from typing import TYPE_CHECKING, Any, Callable
 
+try:  # langgraph is present in the Biomni env; absent in the offline/dev env.
+    from langgraph.errors import GraphRecursionError as _GraphRecursionError
+except Exception:  # pragma: no cover - fallback for offline testing
+    class _GraphRecursionError(Exception):
+        """Placeholder so the salvage path type-checks without langgraph."""
+
 from rampart import (
     AppManifest,
     ObservabilityLevel,
@@ -93,11 +99,19 @@ class BiomniSession:
     directly so prior turns persist across ``send_async`` calls.
     """
 
+    # Correction message Biomni's generate node injects when a reply carries no
+    # <execute>/<solution>/<think> tags. Because Biomni counts these as
+    # AIMessages while injecting them as HumanMessages, its retry cap never
+    # trips and a prose reply (e.g. a refusal) loops to the recursion limit. We
+    # break the loop ourselves after a couple of corrections.
+    _CORRECTION_MARK = "Each response must include thinking process"
+
     def __init__(self, *, agent: Any, observability: ObservabilityLevel,
-                 recursion_limit: int = 500) -> None:
+                 recursion_limit: int = 40, max_parse_corrections: int = 2) -> None:
         self._agent = agent
         self._observability = observability
         self._recursion_limit = recursion_limit
+        self._max_parse_corrections = max_parse_corrections
         self._thread_id = uuid.uuid4().hex  # isolate this session in the checkpointer
         self._messages: list[Any] = []       # list[BaseMessage]; system prompt added by the node
         self._seeded = 0                      # number of pre-seeded (synthetic-prefix) messages
@@ -125,11 +139,31 @@ class BiomniSession:
         config = {"recursion_limit": self._recursion_limit,
                   "configurable": {"thread_id": self._thread_id}}
 
-        # Run the graph synchronously in a worker thread (LangGraph .invoke is
-        # blocking; RAMPART's loop is async).
+        # Stream the graph in a worker thread (LangGraph is blocking; RAMPART's
+        # loop is async). Streaming lets us (a) salvage the transcript if the
+        # graph hits its recursion limit, and (b) stop early once Biomni starts
+        # looping its "no tags" correction on a prose reply -- otherwise a single
+        # refusal spins to the recursion limit, wasting model calls.
         import asyncio
 
-        final_state = await asyncio.to_thread(self._agent.app.invoke, inputs, config)
+        def _run() -> dict[str, Any]:
+            last_state = {"messages": list(self._messages)}
+            corrections = 0
+            try:
+                for state in self._agent.app.stream(inputs, stream_mode="values", config=config):
+                    last_state = state
+                    last = state["messages"][-1]
+                    if self._CORRECTION_MARK in (getattr(last, "content", "") or ""):
+                        corrections += 1
+                        if corrections >= self._max_parse_corrections:
+                            break
+            except _GraphRecursionError:
+                pass  # recursion cap hit (e.g. Biomni's parse loop): salvage transcript
+            # Other exceptions (auth, network, provider errors) propagate so the
+            # run surfaces them rather than silently scoring an empty transcript.
+            return last_state
+
+        final_state = await asyncio.to_thread(_run)
         new_messages = final_state["messages"][before:]
         self._messages = final_state["messages"]  # accumulate for the next turn
 
@@ -189,6 +223,8 @@ class BiomniAdapter:
         use_tool_retriever: bool = True,
         defense_prompt: str | None = None,
         observability: ObservabilityLevel = ObservabilityLevel.TOOL_ONLY,
+        recursion_limit: int = 40,
+        max_parse_corrections: int = 2,
     ) -> None:
         self._llm = llm
         self._path = path
@@ -199,6 +235,8 @@ class BiomniAdapter:
         self._use_tool_retriever = use_tool_retriever
         self._defense_prompt = defense_prompt
         self._observability = observability
+        self._recursion_limit = recursion_limit
+        self._max_parse_corrections = max_parse_corrections
         self._agent: Any | None = None
 
     def _build_agent(self) -> Any:
@@ -231,7 +269,9 @@ class BiomniAdapter:
         return self._agent
 
     async def create_session_async(self) -> BiomniSession:
-        return BiomniSession(agent=self.agent, observability=self._observability)
+        return BiomniSession(agent=self.agent, observability=self._observability,
+                             recursion_limit=self._recursion_limit,
+                             max_parse_corrections=self._max_parse_corrections)
 
     @property
     def manifest(self) -> AppManifest:
